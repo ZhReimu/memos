@@ -69,10 +69,13 @@ func NewServer(ctx context.Context, profile *profile.Profile, store *store.Store
 	// Create and register RSS routes.
 	rss.NewRSSService(s.Profile, s.Store).RegisterRoutes(rootGroup)
 
-	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
-		apiv1.NewLoggerInterceptor().LoggerInterceptor,
-		apiv1.NewGRPCAuthInterceptor(store, secret).AuthenticationInterceptor,
-	))
+	grpcServer := grpc.NewServer(
+		// Override the maximum receiving message size to 100M for uploading large resources.
+		grpc.MaxRecvMsgSize(100*1024*1024),
+		grpc.ChainUnaryInterceptor(
+			apiv1.NewLoggerInterceptor().LoggerInterceptor,
+			apiv1.NewGRPCAuthInterceptor(store, secret).AuthenticationInterceptor,
+		))
 	s.grpcServer = grpcServer
 
 	apiV1Service := apiv1.NewAPIV1Service(s.Secret, profile, store, grpcServer)
@@ -85,7 +88,7 @@ func NewServer(ctx context.Context, profile *profile.Profile, store *store.Store
 }
 
 func (s *Server) Start(ctx context.Context) error {
-	address := fmt.Sprintf(":%d", s.Profile.Port)
+	address := fmt.Sprintf("%s:%d", s.Profile.Addr, s.Profile.Port)
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return errors.Wrap(err, "failed to listen")
@@ -149,7 +152,7 @@ func (s *Server) getOrUpsertWorkspaceBasicSetting(ctx context.Context) (*storepb
 	}
 	if modified {
 		workspaceSetting, err := s.Store.UpsertWorkspaceSetting(ctx, &storepb.WorkspaceSetting{
-			Key:   storepb.WorkspaceSettingKey_WORKSPACE_SETTING_BASIC,
+			Key:   storepb.WorkspaceSettingKey_BASIC,
 			Value: &storepb.WorkspaceSetting_BasicSetting{BasicSetting: workspaceBasicSetting},
 		})
 		if err != nil {

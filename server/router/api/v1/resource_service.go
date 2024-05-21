@@ -160,9 +160,6 @@ func (s *APIV1Service) GetResourceBinary(ctx context.Context, request *v1pb.GetR
 		}
 		resourceFind.ID = &id
 	}
-	if request.Uid != "" {
-		resourceFind.UID = &request.Uid
-	}
 	resource, err := s.Store.GetResource(ctx, resourceFind)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get resource: %v", err)
@@ -311,7 +308,7 @@ func SaveResourceBlob(ctx context.Context, s *store.Store, create *store.Resourc
 		return errors.Wrap(err, "Failed to find workspace storage setting")
 	}
 
-	if workspaceStorageSetting.StorageType == storepb.WorkspaceStorageSetting_STORAGE_TYPE_LOCAL {
+	if workspaceStorageSetting.StorageType == storepb.WorkspaceStorageSetting_LOCAL {
 		filepathTemplate := "assets/{timestamp}_{filename}"
 		if workspaceStorageSetting.FilepathTemplate != "" {
 			filepathTemplate = workspaceStorageSetting.FilepathTemplate
@@ -346,7 +343,7 @@ func SaveResourceBlob(ctx context.Context, s *store.Store, create *store.Resourc
 		create.Reference = internalPath
 		create.Blob = nil
 		create.StorageType = storepb.ResourceStorageType_LOCAL
-	} else if workspaceStorageSetting.StorageType == storepb.WorkspaceStorageSetting_STORAGE_TYPE_S3 {
+	} else if workspaceStorageSetting.StorageType == storepb.WorkspaceStorageSetting_S3 {
 		s3Config := workspaceStorageSetting.S3Config
 		if s3Config == nil {
 			return errors.Errorf("No actived external storage found")
@@ -376,6 +373,7 @@ func SaveResourceBlob(ctx context.Context, s *store.Store, create *store.Resourc
 		create.Payload = &storepb.ResourcePayload{
 			Payload: &storepb.ResourcePayload_S3Object_{
 				S3Object: &storepb.ResourcePayload_S3Object{
+					S3Config:          s3Config,
 					Key:               key,
 					LastPresignedTime: timestamppb.New(time.Now()),
 				},
