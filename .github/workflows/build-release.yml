@@ -1,0 +1,80 @@
+name: Memos Build
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        goarch: [amd64, arm64]
+        include:
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            cgo_env: CC=x86_64-w64-mingw32-gcc
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: 1
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Build frontend (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        cd web
+        corepack enable
+        npm install -g pnpm --force
+        pnpm i --frozen-lockfile
+        pnpm build
+        rm -r ../server/router/frontend/dist
+        mv -Force dist ../server/router/frontend/
+
+    - name: Build frontend (non-Windows)
+      if: matrix.os != 'windows-latest'
+      run: |
+        cd web
+        corepack enable
+        npm install -g pnpm --force
+        pnpm i --frozen-lockfile
+        pnpm build
+        rm -rf ../server/router/frontend/dist
+        mv -f dist ../server/router/frontend/
+
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Install mingw-w64 (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        choco install mingw
+        echo ${{ matrix.cgo_env }} >> $GITHUB_ENV
+
+    - name: Install gcc-aarch64-linux-gnu (Ubuntu ARM64)
+      if: matrix.os == 'ubuntu-latest' && matrix.goarch == 'arm64'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu
+        echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+    - name: Build backend
+      run: |
+        cd ./bin/memos
+        go build -o memos-binary-${{ matrix.os }}-${{ matrix.goarch }}${{ matrix.os == 'windows-latest' && '.exe' || '' }} ./main.go
+        rm main.go
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: memos-binary-${{ matrix.os }}-${{ matrix.goarch }}
+        path: ./bin/memos/
