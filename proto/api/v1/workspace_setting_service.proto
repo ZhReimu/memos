@@ -17,7 +17,7 @@ service WorkspaceSettingService {
   // SetWorkspaceSetting updates the setting.
   rpc SetWorkspaceSetting(SetWorkspaceSettingRequest) returns (WorkspaceSetting) {
     option (google.api.http) = {
-      patch: "/api/v1/workspace/{setting.name=settings/*}",
+      patch: "/api/v1/workspace/{setting.name=settings/*}"
       body: "setting"
     };
     option (google.api.method_signature) = "setting";
@@ -36,10 +36,6 @@ message WorkspaceSetting {
 }
 
 message WorkspaceGeneralSetting {
-  // disallow_signup is the flag to disallow signup.
-  bool disallow_signup = 1;
-  // disallow_password_login is the flag to disallow password login.
-  bool disallow_password_login = 2;
   // additional_script is the additional script.
   string additional_script = 3;
   // additional_style is the additional style.
