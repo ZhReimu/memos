@@ -1,8 +1,9 @@
-import { Drawer, IconButton } from "@mui/joy";
+import { Drawer } from "@mui/joy";
+import { Button } from "@usememos/mui";
+import { GanttChartIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { Memo } from "@/types/proto/api/v1/memo_service";
-import Icon from "../Icon";
 import MemoDetailSidebar from "./MemoDetailSidebar";
 
 interface Props {
@@ -26,9 +27,9 @@ const MemoDetailSidebarDrawer = ({ memo }: Props) => {
 
   return (
     <>
-      <IconButton onClick={toggleDrawer(true)}>
-        <Icon.GanttChart className="w-5 h-auto dark:text-gray-400" />
-      </IconButton>
+      <Button variant="plain" className="!bg-transparent px-2" onClick={toggleDrawer(true)}>
+        <GanttChartIcon className="w-5 h-auto dark:text-gray-400" />
+      </Button>
       <Drawer anchor="right" size="sm" open={open} onClose={toggleDrawer(false)}>
         <div className="w-full h-full px-4 bg-zinc-100 dark:bg-zinc-900">
           <MemoDetailSidebar className="py-4" memo={memo} />

@@ -1,5 +1,7 @@
-import { Button, Dropdown, Input, Menu, MenuButton, MenuItem, Radio, RadioGroup } from "@mui/joy";
+import { Dropdown, Menu, MenuButton, MenuItem, Radio, RadioGroup } from "@mui/joy";
+import { Button, Input } from "@usememos/mui";
 import { sortBy } from "lodash-es";
+import { MoreVerticalIcon } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { toast } from "react-hot-toast";
 import { userServiceClient } from "@/grpcweb";
@@ -9,7 +11,6 @@ import { RowStatus } from "@/types/proto/api/v1/common";
 import { User, User_Role } from "@/types/proto/api/v1/user_service";
 import { useTranslate } from "@/utils/i18n";
 import showChangeMemberPasswordDialog from "../ChangeMemberPasswordDialog";
-import Icon from "../Icon";
 
 interface State {
   creatingUser: User;
@@ -158,7 +159,9 @@ const MemberSection = () => {
           </RadioGroup>
         </div>
         <div className="mt-2">
-          <Button onClick={handleCreateUserBtnClick}>{t("common.create")}</Button>
+          <Button color="primary" onClick={handleCreateUserBtnClick}>
+            {t("common.create")}
+          </Button>
         </div>
       </div>
       <div className="w-full flex flex-row justify-between items-center mt-6">
@@ -204,7 +207,7 @@ const MemberSection = () => {
                     ) : (
                       <Dropdown>
                         <MenuButton size="sm">
-                          <Icon.MoreVertical className="w-4 h-auto" />
+                          <MoreVerticalIcon className="w-4 h-auto" />
                         </MenuButton>
                         <Menu placement="bottom-end" size="sm">
                           <MenuItem onClick={() => handleChangePasswordClick(user)}>

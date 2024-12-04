@@ -1,46 +1,41 @@
-import { Button, IconButton, Tooltip } from "@mui/joy";
+import { Tooltip } from "@mui/joy";
+import { Button } from "@usememos/mui";
 import clsx from "clsx";
+import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import useLocalStorage from "react-use/lib/useLocalStorage";
-import Icon from "@/components/Icon";
 import Navigation from "@/components/Navigation";
 import useCurrentUser from "@/hooks/useCurrentUser";
 import useResponsiveWidth from "@/hooks/useResponsiveWidth";
 import Loading from "@/pages/Loading";
 import { Routes } from "@/router";
+import { useMemoFilterStore } from "@/store/v1";
+import { useTranslate } from "@/utils/i18n";
 
 const RootLayout = () => {
+  const t = useTranslate();
   const location = useLocation();
   const { sm } = useResponsiveWidth();
   const currentUser = useCurrentUser();
-  const [lastVisited] = useLocalStorage<string>("lastVisited", "/home");
+  const memoFilterStore = useMemoFilterStore();
   const [collapsed, setCollapsed] = useLocalStorage<boolean>("navigation-collapsed", false);
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
     if (!currentUser) {
-      if (
-        ([Routes.ROOT, Routes.HOME, Routes.TIMELINE, Routes.RESOURCES, Routes.INBOX, Routes.ARCHIVED, Routes.SETTING] as string[]).includes(
-          location.pathname,
-        )
-      ) {
+      if (([Routes.ROOT, Routes.RESOURCES, Routes.INBOX, Routes.ARCHIVED, Routes.SETTING] as string[]).includes(location.pathname)) {
         window.location.href = Routes.EXPLORE;
         return;
       }
-    } else {
-      if (location.pathname === Routes.ROOT) {
-        if (lastVisited && ([Routes.HOME, Routes.TIMELINE] as string[]).includes(lastVisited)) {
-          window.location.href = lastVisited;
-        } else {
-          window.location.href = Routes.HOME;
-        }
-        return;
-      }
     }
-
     setInitialized(true);
   }, []);
+
+  useEffect(() => {
+    // When the route changes, remove all filters.
+    memoFilterStore.removeFilter(() => true);
+  }, [location.pathname]);
 
   return !initialized ? (
     <Loading />
@@ -61,14 +56,15 @@ const RootLayout = () => {
                 onClick={() => setCollapsed(!collapsed)}
               >
                 {!collapsed ? (
-                  <Button variant="plain" color="neutral" startDecorator={<Icon.ChevronLeft className="w-5 h-auto opacity-70" />}>
-                    Collapse
+                  <Button className="rounded-xl" variant="plain">
+                    <ChevronLeftIcon className="w-5 h-auto opacity-70 mr-1" />
+                    {t("common.collapse")}
                   </Button>
                 ) : (
-                  <Tooltip title="Expand" placement="right" arrow>
-                    <IconButton>
-                      <Icon.ChevronRight className="w-5 h-auto opacity-70" />
-                    </IconButton>
+                  <Tooltip title={t("common.expand")} placement="right" arrow>
+                    <Button className="rounded-xl" variant="plain">
+                      <ChevronRightIcon className="w-5 h-auto opacity-70" />
+                    </Button>
                   </Tooltip>
                 )}
               </div>

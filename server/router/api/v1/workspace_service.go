@@ -13,9 +13,9 @@ import (
 
 func (s *APIV1Service) GetWorkspaceProfile(ctx context.Context, _ *v1pb.GetWorkspaceProfileRequest) (*v1pb.WorkspaceProfile, error) {
 	workspaceProfile := &v1pb.WorkspaceProfile{
-		Version: s.Profile.Version,
-		Mode:    s.Profile.Mode,
-		Public:  s.Profile.Public,
+		Version:     s.Profile.Version,
+		Mode:        s.Profile.Mode,
+		InstanceUrl: s.Profile.InstanceURL,
 	}
 	owner, err := s.GetInstanceOwner(ctx)
 	if err != nil {

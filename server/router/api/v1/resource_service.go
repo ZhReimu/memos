@@ -6,16 +6,16 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/google/cel-go/cel"
+	"github.com/disintegration/imaging"
 	"github.com/lithammer/shortuuid/v4"
 	"github.com/pkg/errors"
-	expr "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -35,7 +35,14 @@ const (
 	// This is unrelated to maximum upload size limit, which is now set through system setting.
 	MaxUploadBufferSizeBytes = 32 << 20
 	MebiByte                 = 1024 * 1024
+	// ThumbnailCacheFolder is the folder name where the thumbnail images are stored.
+	ThumbnailCacheFolder = ".thumbnail_cache"
 )
+
+var SupportedThumbnailMimeTypes = []string{
+	"image/png",
+	"image/jpeg",
+}
 
 func (s *APIV1Service) CreateResource(ctx context.Context, request *v1pb.CreateResourceRequest) (*v1pb.Resource, error) {
 	user, err := s.GetCurrentUser(ctx)
@@ -102,35 +109,6 @@ func (s *APIV1Service) ListResources(ctx context.Context, _ *v1pb.ListResourcesR
 	return response, nil
 }
 
-func (s *APIV1Service) SearchResources(ctx context.Context, request *v1pb.SearchResourcesRequest) (*v1pb.SearchResourcesResponse, error) {
-	if request.Filter == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "filter is empty")
-	}
-	filter, err := parseSearchResourcesFilter(request.Filter)
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "failed to parse filter: %v", err)
-	}
-	resourceFind := &store.FindResource{}
-	if filter.UID != nil {
-		resourceFind.UID = filter.UID
-	}
-	user, err := s.GetCurrentUser(ctx)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to get current user: %v", err)
-	}
-	resourceFind.CreatorID = &user.ID
-	resources, err := s.Store.ListResources(ctx, resourceFind)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to search resources: %v", err)
-	}
-
-	response := &v1pb.SearchResourcesResponse{}
-	for _, resource := range resources {
-		response.Resources = append(response.Resources, s.convertResourceFromStore(ctx, resource))
-	}
-	return response, nil
-}
-
 func (s *APIV1Service) GetResource(ctx context.Context, request *v1pb.GetResourceRequest) (*v1pb.Resource, error) {
 	id, err := ExtractResourceIDFromName(request.Name)
 	if err != nil {
@@ -145,7 +123,20 @@ func (s *APIV1Service) GetResource(ctx context.Context, request *v1pb.GetResourc
 	if resource == nil {
 		return nil, status.Errorf(codes.NotFound, "resource not found")
 	}
+	return s.convertResourceFromStore(ctx, resource), nil
+}
 
+//nolint:all
+func (s *APIV1Service) GetResourceByUid(ctx context.Context, request *v1pb.GetResourceByUidRequest) (*v1pb.Resource, error) {
+	resource, err := s.Store.GetResource(ctx, &store.FindResource{
+		UID: &request.Uid,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get resource: %v", err)
+	}
+	if resource == nil {
+		return nil, status.Errorf(codes.NotFound, "resource not found")
+	}
 	return s.convertResourceFromStore(ctx, resource), nil
 }
 
@@ -189,25 +180,23 @@ func (s *APIV1Service) GetResourceBinary(ctx context.Context, request *v1pb.GetR
 		}
 	}
 
-	blob := resource.Blob
-	if resource.StorageType == storepb.ResourceStorageType_LOCAL {
-		resourcePath := filepath.FromSlash(resource.Reference)
-		if !filepath.IsAbs(resourcePath) {
-			resourcePath = filepath.Join(s.Profile.Data, resourcePath)
+	if request.Thumbnail && util.HasPrefixes(resource.Type, SupportedThumbnailMimeTypes...) {
+		thumbnailBlob, err := s.getOrGenerateThumbnail(resource)
+		if err != nil {
+			// thumbnail failures are logged as warnings and not cosidered critical failures as
+			// a resource image can be used in its place.
+			slog.Warn("failed to get resource thumbnail image", slog.Any("error", err))
+		} else {
+			return &httpbody.HttpBody{
+				ContentType: resource.Type,
+				Data:        thumbnailBlob,
+			}, nil
 		}
+	}
 
-		file, err := os.Open(resourcePath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil, status.Errorf(codes.NotFound, "file not found for resource: %s", request.Name)
-			}
-			return nil, status.Errorf(codes.Internal, "failed to open the file: %v", err)
-		}
-		defer file.Close()
-		blob, err = io.ReadAll(file)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to read the file: %v", err)
-		}
+	blob, err := s.GetResourceBlob(resource)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get resource blob: %v", err)
 	}
 
 	contentType := resource.Type
@@ -215,11 +204,10 @@ func (s *APIV1Service) GetResourceBinary(ctx context.Context, request *v1pb.GetR
 		contentType += "; charset=utf-8"
 	}
 
-	httpBody := &httpbody.HttpBody{
+	return &httpbody.HttpBody{
 		ContentType: contentType,
 		Data:        blob,
-	}
-	return httpBody, nil
+	}, nil
 }
 
 func (s *APIV1Service) UpdateResource(ctx context.Context, request *v1pb.UpdateResourceRequest) (*v1pb.Resource, error) {
@@ -395,6 +383,77 @@ func SaveResourceBlob(ctx context.Context, s *store.Store, create *store.Resourc
 	return nil
 }
 
+func (s *APIV1Service) GetResourceBlob(resource *store.Resource) ([]byte, error) {
+	blob := resource.Blob
+	if resource.StorageType == storepb.ResourceStorageType_LOCAL {
+		resourcePath := filepath.FromSlash(resource.Reference)
+		if !filepath.IsAbs(resourcePath) {
+			resourcePath = filepath.Join(s.Profile.Data, resourcePath)
+		}
+
+		file, err := os.Open(resourcePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, errors.Wrap(err, "file not found")
+			}
+			return nil, errors.Wrap(err, "failed to open the file")
+		}
+		defer file.Close()
+		blob, err = io.ReadAll(file)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to read the file")
+		}
+	}
+	return blob, nil
+}
+
+const (
+	// thumbnailRatio is the ratio of the thumbnail image.
+	thumbnailRatio = 0.8
+)
+
+// getOrGenerateThumbnail returns the thumbnail image of the resource.
+func (s *APIV1Service) getOrGenerateThumbnail(resource *store.Resource) ([]byte, error) {
+	thumbnailCacheFolder := filepath.Join(s.Profile.Data, ThumbnailCacheFolder)
+	if err := os.MkdirAll(thumbnailCacheFolder, os.ModePerm); err != nil {
+		return nil, errors.Wrap(err, "failed to create thumbnail cache folder")
+	}
+	filePath := filepath.Join(thumbnailCacheFolder, fmt.Sprintf("%d%s", resource.ID, filepath.Ext(resource.Filename)))
+	if _, err := os.Stat(filePath); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, errors.Wrap(err, "failed to check thumbnail image stat")
+		}
+
+		// If thumbnail image does not exist, generate and save the thumbnail image.
+		blob, err := s.GetResourceBlob(resource)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to get resource blob")
+		}
+		img, err := imaging.Decode(bytes.NewReader(blob), imaging.AutoOrientation(true))
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to decode thumbnail image")
+		}
+
+		thumbnailWidth := int(float64(img.Bounds().Dx()) * thumbnailRatio)
+		// Resize the image to the thumbnailWidth.
+		thumbnailImage := imaging.Resize(img, thumbnailWidth, 0, imaging.Lanczos)
+		if err := imaging.Save(thumbnailImage, filePath); err != nil {
+			return nil, errors.Wrap(err, "failed to save thumbnail file")
+		}
+	}
+
+	thumbnailFile, err := os.Open(filePath)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to open thumbnail file")
+	}
+	defer thumbnailFile.Close()
+	blob, err := io.ReadAll(thumbnailFile)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to read thumbnail file")
+	}
+	return blob, nil
+}
+
 var fileKeyPattern = regexp.MustCompile(`\{[a-z]{1,9}\}`)
 
 func replaceFilenameWithPathTemplate(path, filename string) string {
@@ -423,51 +482,4 @@ func replaceFilenameWithPathTemplate(path, filename string) string {
 		return s
 	})
 	return path
-}
-
-// SearchResourcesFilterCELAttributes are the CEL attributes for SearchResourcesFilter.
-var SearchResourcesFilterCELAttributes = []cel.EnvOption{
-	cel.Variable("uid", cel.StringType),
-}
-
-type SearchResourcesFilter struct {
-	UID *string
-}
-
-func parseSearchResourcesFilter(expression string) (*SearchResourcesFilter, error) {
-	e, err := cel.NewEnv(SearchResourcesFilterCELAttributes...)
-	if err != nil {
-		return nil, err
-	}
-	ast, issues := e.Compile(expression)
-	if issues != nil {
-		return nil, errors.Errorf("found issue %v", issues)
-	}
-	filter := &SearchResourcesFilter{}
-	expr, err := cel.AstToParsedExpr(ast)
-	if err != nil {
-		return nil, err
-	}
-	callExpr := expr.GetExpr().GetCallExpr()
-	findSearchResourcesField(callExpr, filter)
-	return filter, nil
-}
-
-func findSearchResourcesField(callExpr *expr.Expr_Call, filter *SearchResourcesFilter) {
-	if len(callExpr.Args) == 2 {
-		idExpr := callExpr.Args[0].GetIdentExpr()
-		if idExpr != nil {
-			if idExpr.Name == "uid" {
-				uid := callExpr.Args[1].GetConstExpr().GetStringValue()
-				filter.UID = &uid
-			}
-			return
-		}
-	}
-	for _, arg := range callExpr.Args {
-		callExpr := arg.GetCallExpr()
-		if callExpr != nil {
-			findSearchResourcesField(callExpr, filter)
-		}
-	}
 }
